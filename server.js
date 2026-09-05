@@ -5,16 +5,13 @@ const app = express();
 
 app.use(express.json());
 
+let firebaseReady = false;
+
 /*
 |--------------------------------------------------------------------------
 | Firebase Admin SDK
 |--------------------------------------------------------------------------
-| Credentials बाद में Render Environment Variables से आएँगी।
-| अभी GitHub में कोई Firebase secret/key नहीं डालना है।
-|--------------------------------------------------------------------------
 */
-
-let firebaseReady = false;
 
 try {
   if (
@@ -31,12 +28,16 @@ try {
     });
 
     firebaseReady = true;
+
     console.log("Firebase Admin SDK initialized.");
   } else {
     console.log("Firebase credentials are not configured yet.");
   }
 } catch (error) {
-  console.error("Firebase initialization failed:", error.message);
+  console.error(
+    "Firebase initialization failed:",
+    error.message
+  );
 }
 
 /*
@@ -56,7 +57,7 @@ app.get("/", (req, res) => {
 
 /*
 |--------------------------------------------------------------------------
-| Customer Check
+| Owner / Customer Check
 |--------------------------------------------------------------------------
 */
 
@@ -74,21 +75,74 @@ app.post("/customer/check", async (req, res) => {
     if (!firebaseReady) {
       return res.status(503).json({
         success: false,
-        message: "Firebase backend is not configured yet",
+        message: "Firebase backend is not configured",
       });
     }
 
     const db = admin.firestore();
 
     /*
-     * Firestore collection/schema को final करने के बाद
-     * यहाँ exact customer lookup लगाया जाएगा.
+     * Search inside owners collection.
+     *
+     * We check the phone fields because the existing
+     * owner documents may contain the number in different
+     * fields.
+     */
+
+    const phoneFields = [
+      "mainPhone",
+      "phone",
+      "phoneNumber",
+    ];
+
+    let ownerDoc = null;
+
+    for (const field of phoneFields) {
+      const snapshot = await db
+        .collection("owners")
+        .where(field, "==", phoneNumber)
+        .limit(1)
+        .get();
+
+      if (!snapshot.empty) {
+        ownerDoc = snapshot.docs[0];
+        break;
+      }
+    }
+
+    /*
+     |--------------------------------------------------------------------------
+     | Owner Found
+     |--------------------------------------------------------------------------
+     */
+
+    if (ownerDoc) {
+      const data = ownerDoc.data();
+
+      return res.json({
+        success: true,
+        exists: true,
+        profileCompleted:
+            data.profileCompleted === true,
+        ownerId: data.ownerId || null,
+        authUid: data.authUid || null,
+        role: data.role || "owner",
+      });
+    }
+
+    /*
+     |--------------------------------------------------------------------------
+     | Owner Not Found
+     |--------------------------------------------------------------------------
      */
 
     return res.json({
       success: true,
       exists: false,
-      message: "Customer check endpoint is ready",
+      profileCompleted: false,
+      ownerId: null,
+      authUid: null,
+      role: "owner",
     });
   } catch (error) {
     console.error("Customer check error:", error);
@@ -109,5 +163,7 @@ app.post("/customer/check", async (req, res) => {
 const PORT = process.env.PORT || 10000;
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Dojo Platform Backend running on port ${PORT}`);
+  console.log(
+    `Dojo Platform Backend running on port ${PORT}`
+  );
 });
