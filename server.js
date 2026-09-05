@@ -52,7 +52,7 @@ try {
 */
 
 app.get("/", (req, res) => {
-  res.json({
+  res.status(200).json({
     success: true,
     service: "Dojo Platform Backend",
     status: "running",
@@ -62,11 +62,69 @@ app.get("/", (req, res) => {
 
 /*
 |--------------------------------------------------------------------------
+| Normalize Indian Phone Number
+|--------------------------------------------------------------------------
+*/
+
+function normalizeIndianPhone(phoneNumber) {
+  if (!phoneNumber) {
+    return null;
+  }
+
+  let phone = String(phoneNumber).trim();
+
+  phone = phone.replace(/\s+/g, "");
+  phone = phone.replace(/-/g, "");
+
+  if (phone.startsWith("+91")) {
+    phone = phone.substring(3);
+  } else if (
+    phone.startsWith("91") &&
+    phone.length === 12
+  ) {
+    phone = phone.substring(2);
+  }
+
+  if (!/^[6-9]\d{9}$/.test(phone)) {
+    return null;
+  }
+
+  return `+91${phone}`;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Mask Phone For Logs
+|--------------------------------------------------------------------------
+*/
+
+function maskPhone(phoneNumber) {
+  if (!phoneNumber) {
+    return "unknown";
+  }
+
+  const phone = String(phoneNumber);
+
+  if (phone.length < 6) {
+    return "***";
+  }
+
+  return `${phone.substring(0, 3)}******${phone.substring(
+    phone.length - 2,
+  )}`;
+}
+
+/*
+|--------------------------------------------------------------------------
 | MSG91 Access Token Verification
 |--------------------------------------------------------------------------
 |
 | Flutter sends:
-|   accessToken + phoneNumber
+|
+| {
+|   accessToken: "...",
+|   phoneNumber: "+91XXXXXXXXXX"
+| }
 |
 | IMPORTANT:
 | The MSG91 Authkey stays only on Render.
@@ -79,7 +137,7 @@ async function verifyMsg91AccessToken(accessToken) {
 
   if (!authKey) {
     throw new Error(
-      "MSG91_AUTH_KEY is not configured",
+      "MSG91_AUTH_KEY is not configured on Render.",
     );
   }
 
@@ -88,7 +146,7 @@ async function verifyMsg91AccessToken(accessToken) {
     typeof accessToken !== "string"
   ) {
     throw new Error(
-      "MSG91 access token is missing",
+      "MSG91 access token is missing.",
     );
   }
 
@@ -109,7 +167,7 @@ async function verifyMsg91AccessToken(accessToken) {
 
   const text = await response.text();
 
-  let data;
+  let data = {};
 
   try {
     data = JSON.parse(text);
@@ -132,65 +190,15 @@ async function verifyMsg91AccessToken(accessToken) {
       "MSG91 RESPONSE KEYS:",
       Object.keys(data),
     );
-
-    if (
-      data.data &&
-      typeof data.data === "object"
-    ) {
-      console.log(
-        "MSG91 DATA KEYS:",
-        Object.keys(data.data),
-      );
-    }
   }
 
   if (!response.ok) {
     throw new Error(
-      `MSG91 access-token verification failed with status ${response.status}`,
+      `MSG91 access-token verification failed with status ${response.status}.`,
     );
   }
 
   return data;
-}
-
-/*
-|--------------------------------------------------------------------------
-| Normalize Indian Phone Number
-|--------------------------------------------------------------------------
-*/
-
-function normalizeIndianPhone(phoneNumber) {
-  if (!phoneNumber) {
-    return null;
-  }
-
-  let phone =
-    String(phoneNumber).trim();
-
-  phone =
-    phone.replace(/\s+/g, "");
-
-  phone =
-    phone.replace(/-/g, "");
-
-  if (phone.startsWith("+91")) {
-    phone =
-      phone.substring(3);
-  } else if (
-    phone.startsWith("91") &&
-    phone.length === 12
-  ) {
-    phone =
-      phone.substring(2);
-  }
-
-  if (
-    !/^[6-9]\d{9}$/.test(phone)
-  ) {
-    return null;
-  }
-
-  return `+91${phone}`;
 }
 
 /*
@@ -202,27 +210,21 @@ function normalizeIndianPhone(phoneNumber) {
 async function findOwnerByPhone(phoneNumber) {
   if (!firebaseReady) {
     throw new Error(
-      "Firebase Admin SDK is not ready",
+      "Firebase Admin SDK is not ready.",
     );
   }
 
-  const db =
-    admin.firestore();
-
   const normalizedPhone =
-    normalizeIndianPhone(
-      phoneNumber,
-    );
+    normalizeIndianPhone(phoneNumber);
 
   if (!normalizedPhone) {
     return null;
   }
 
+  const db = admin.firestore();
+
   const cleanTenDigit =
-    normalizedPhone.replace(
-      "+91",
-      "",
-    );
+    normalizedPhone.substring(3);
 
   const phoneValues = [
     normalizedPhone,
@@ -236,27 +238,18 @@ async function findOwnerByPhone(phoneNumber) {
     "phoneNumber",
   ];
 
-  for (
-    const field of phoneFields
-  ) {
-    for (
-      const value of phoneValues
-    ) {
-      console.log(
-        `Firestore owner lookup: ${field}`,
-      );
-
+  for (const field of phoneFields) {
+    for (const value of phoneValues) {
       try {
-        const snapshot =
-          await db
-            .collection("owners")
-            .where(
-              field,
-              "==",
-              value,
-            )
-            .limit(1)
-            .get();
+        console.log(
+          `Firestore owner lookup: ${field}`,
+        );
+
+        const snapshot = await db
+          .collection("owners")
+          .where(field, "==", value)
+          .limit(1)
+          .get();
 
         if (!snapshot.empty) {
           console.log(
@@ -277,7 +270,7 @@ async function findOwnerByPhone(phoneNumber) {
   }
 
   console.log(
-    "No existing owner found for verified phone.",
+    "No existing owner found for phone.",
   );
 
   return null;
@@ -286,15 +279,6 @@ async function findOwnerByPhone(phoneNumber) {
 /*
 |--------------------------------------------------------------------------
 | Customer / Owner Check
-|--------------------------------------------------------------------------
-|
-| Flutter sends:
-|
-| {
-|   "accessToken": "MSG91_JWT",
-|   "phoneNumber": "+91XXXXXXXXXX"
-| }
-|
 |--------------------------------------------------------------------------
 */
 
@@ -311,7 +295,7 @@ app.post(
 
     try {
       /*
-       * Firebase check
+       * Firebase
        */
 
       if (!firebaseReady) {
@@ -327,7 +311,7 @@ app.post(
       }
 
       /*
-       * Read request data
+       * Request body
        */
 
       const accessToken =
@@ -337,7 +321,7 @@ app.post(
         req.body?.phoneNumber;
 
       /*
-       * Access token validation
+       * Access token
        */
 
       if (
@@ -356,7 +340,7 @@ app.post(
       }
 
       /*
-       * Phone validation
+       * Phone number
        */
 
       if (
@@ -381,7 +365,7 @@ app.post(
 
       if (!normalizedPhone) {
         console.error(
-          "Invalid phoneNumber.",
+          "Invalid Indian phone number.",
         );
 
         return res.status(400).json({
@@ -392,11 +376,12 @@ app.post(
       }
 
       console.log(
-        "Phone number received for customer check.",
+        "Customer phone:",
+        maskPhone(normalizedPhone),
       );
 
       /*
-       * Step 1:
+       * STEP 1
        * Verify MSG91 access token.
        */
 
@@ -409,22 +394,25 @@ app.post(
       );
 
       /*
-       * Step 2:
-       * Use the same phone number that was
-       * entered and OTP-verified in the app.
+       * IMPORTANT:
+       * Do NOT try to extract phone from
+       * MSG91 verifyAccessToken response.
        *
-       * MSG91's access-token verification
-       * response currently does not expose
-       * the phone field in the response body.
+       * The current MSG91 response can return
+       * only message/type/code.
+       *
+       * The phone supplied by Flutter is used
+       * for the Firestore owner lookup after
+       * successful MSG91 token verification.
        */
 
       console.log(
-        "Using OTP verified login phone.",
+        "Using verified login phone for owner lookup.",
       );
 
       /*
-       * Step 3:
-       * Search existing owner.
+       * STEP 2
+       * Find existing owner.
        */
 
       const ownerDoc =
@@ -434,13 +422,12 @@ app.post(
 
       /*
        |--------------------------------------------------------------------------
-       | Existing Owner
+       | EXISTING OWNER
        |--------------------------------------------------------------------------
        */
 
       if (ownerDoc) {
-        const data =
-          ownerDoc.data();
+        const data = ownerDoc.data();
 
         console.log(
           "Existing owner account found.",
@@ -448,7 +435,6 @@ app.post(
 
         return res.status(200).json({
           success: true,
-
           exists: true,
 
           profileCompleted:
@@ -474,7 +460,7 @@ app.post(
 
       /*
        |--------------------------------------------------------------------------
-       | New Owner
+       | NEW OWNER
        |--------------------------------------------------------------------------
        */
 
@@ -484,7 +470,6 @@ app.post(
 
       return res.status(200).json({
         success: true,
-
         exists: false,
 
         profileCompleted: false,
@@ -509,20 +494,14 @@ app.post(
 
       console.error(
         "ERROR NAME:",
-        error?.name,
+        error?.name || "UnknownError",
       );
 
       console.error(
         "ERROR MESSAGE:",
-        error?.message,
+        error?.message ||
+          "Unknown backend error.",
       );
-
-      if (error?.stack) {
-        console.error(
-          "ERROR STACK:",
-          error.stack,
-        );
-      }
 
       console.error(
         "==================================================",
@@ -541,6 +520,19 @@ app.post(
     }
   },
 );
+
+/*
+|--------------------------------------------------------------------------
+| 404 Handler
+|--------------------------------------------------------------------------
+*/
+
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "Endpoint not found.",
+  });
+});
 
 /*
 |--------------------------------------------------------------------------
