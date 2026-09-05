@@ -80,19 +80,6 @@ async function verifyMsg91AccessToken(accessToken) {
     throw new Error("MSG91 access token is missing");
   }
 
-  /*
-   * MSG91 OTP Widget flow:
-   *
-   * Verify OTP
-   *      ↓
-   * JWT access-token
-   *      ↓
-   * Verify access-token
-   *
-   * The exact response is handled defensively because
-   * MSG91 can return different response wrappers.
-   */
-
   const response = await fetch(
     "https://api.msg91.com/api/v5/widget/verifyAccessToken",
     {
@@ -100,6 +87,7 @@ async function verifyMsg91AccessToken(accessToken) {
       headers: {
         authkey: authKey,
         "Content-Type": "application/json",
+        Accept: "application/json",
       },
       body: JSON.stringify({
         "access-token": accessToken,
@@ -119,13 +107,29 @@ async function verifyMsg91AccessToken(accessToken) {
     };
   }
 
-  if (!response.ok) {
-    console.error(
-      "MSG91 access-token verification failed:",
-      response.status
+  console.log(
+    "MSG91 ACCESS TOKEN STATUS:",
+    response.status
+  );
+
+  if (data && typeof data === "object") {
+    console.log(
+      "MSG91 RESPONSE KEYS:",
+      Object.keys(data)
     );
 
-    throw new Error("Invalid MSG91 access token");
+    if (data.data && typeof data.data === "object") {
+      console.log(
+        "MSG91 DATA KEYS:",
+        Object.keys(data.data)
+      );
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `MSG91 access-token verification failed with status ${response.status}`
+    );
   }
 
   return data;
@@ -147,13 +151,19 @@ function extractVerifiedPhone(data) {
     data.phone,
     data.phoneNumber,
     data.mobileNumber,
+
     data.data?.mobile,
     data.data?.phone,
     data.data?.phoneNumber,
     data.data?.mobileNumber,
+
     data.user?.mobile,
     data.user?.phone,
     data.user?.phoneNumber,
+
+    data.data?.user?.mobile,
+    data.data?.user?.phone,
+    data.data?.user?.phoneNumber,
   ];
 
   for (const value of possibleValues) {
@@ -202,23 +212,26 @@ function normalizeIndianPhone(phoneNumber) {
 */
 
 async function findOwnerByPhone(phoneNumber) {
+  if (!firebaseReady) {
+    throw new Error("Firebase Admin SDK is not ready");
+  }
+
   const db = admin.firestore();
 
-  const normalizedPhone = normalizeIndianPhone(phoneNumber);
+  const normalizedPhone =
+    normalizeIndianPhone(phoneNumber);
 
   if (!normalizedPhone) {
     return null;
   }
 
-  /*
-   * Possible phone fields already used by the
-   * existing Dojo owner documents.
-   */
+  const cleanTenDigit =
+    normalizedPhone.replace("+91", "");
 
   const phoneValues = [
     normalizedPhone,
-    normalizedPhone.replace("+91", ""),
-    normalizedPhone.replace("+91", "91"),
+    cleanTenDigit,
+    `91${cleanTenDigit}`,
   ];
 
   const phoneFields = [
@@ -229,17 +242,38 @@ async function findOwnerByPhone(phoneNumber) {
 
   for (const field of phoneFields) {
     for (const value of phoneValues) {
-      const snapshot = await db
-        .collection("owners")
-        .where(field, "==", value)
-        .limit(1)
-        .get();
+      console.log(
+        `Firestore owner lookup: ${field} = ${value}`
+      );
 
-      if (!snapshot.empty) {
-        return snapshot.docs[0];
+      try {
+        const snapshot = await db
+          .collection("owners")
+          .where(field, "==", value)
+          .limit(1)
+          .get();
+
+        if (!snapshot.empty) {
+          console.log(
+            `Owner found using ${field}`
+          );
+
+          return snapshot.docs[0];
+        }
+      } catch (error) {
+        console.error(
+          `Firestore lookup failed for ${field}:`,
+          error.message
+        );
+
+        throw error;
       }
     }
   }
+
+  console.log(
+    "No existing owner found for verified phone."
+  );
 
   return null;
 }
@@ -249,7 +283,7 @@ async function findOwnerByPhone(phoneNumber) {
 | Customer / Owner Check
 |--------------------------------------------------------------------------
 |
-| Flutter should send:
+| Flutter sends:
 |
 | {
 |   "accessToken": "MSG91_JWT"
@@ -261,37 +295,74 @@ async function findOwnerByPhone(phoneNumber) {
 */
 
 app.post("/customer/check", async (req, res) => {
+  console.log(
+    "=================================================="
+  );
+
+  console.log(
+    "CUSTOMER CHECK REQUEST RECEIVED"
+  );
+
   try {
+    /*
+     * Firebase check
+     */
+
     if (!firebaseReady) {
+      console.error(
+        "Firebase Admin SDK is not ready."
+      );
+
       return res.status(503).json({
         success: false,
-        message: "Firebase backend is not configured",
+        message:
+          "Firebase backend is not configured",
       });
     }
 
-    const accessToken = req.body?.accessToken;
+    /*
+     * Access token check
+     */
+
+    const accessToken =
+      req.body?.accessToken;
 
     if (
       !accessToken ||
       typeof accessToken !== "string"
     ) {
+      console.error(
+        "Missing MSG91 accessToken."
+      );
+
       return res.status(400).json({
         success: false,
-        message: "accessToken is required",
+        message:
+          "accessToken is required",
       });
     }
 
+    console.log(
+      "MSG91 accessToken received."
+    );
+
     /*
      * Step 1:
-     * Verify the token with MSG91.
+     * Verify MSG91 access token.
      */
 
     const msg91Data =
-      await verifyMsg91AccessToken(accessToken);
+      await verifyMsg91AccessToken(
+        accessToken
+      );
+
+    console.log(
+      "MSG91 access-token verification successful."
+    );
 
     /*
      * Step 2:
-     * Extract the phone number that MSG91 itself verified.
+     * Extract verified phone.
      */
 
     const verifiedPhone =
@@ -299,7 +370,7 @@ app.post("/customer/check", async (req, res) => {
 
     if (!verifiedPhone) {
       console.error(
-        "MSG91 response did not contain a verified phone number."
+        "Verified phone was not found in MSG91 response."
       );
 
       return res.status(401).json({
@@ -309,16 +380,36 @@ app.post("/customer/check", async (req, res) => {
       });
     }
 
+    console.log(
+      "Verified phone received from MSG91."
+    );
+
     const normalizedPhone =
-      normalizeIndianPhone(verifiedPhone);
+      normalizeIndianPhone(
+        verifiedPhone
+      );
+
+    if (!normalizedPhone) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Invalid verified phone number",
+      });
+    }
+
+    console.log(
+      "Verified phone normalized successfully."
+    );
 
     /*
      * Step 3:
-     * Search the existing owners collection.
+     * Search existing owner.
      */
 
     const ownerDoc =
-      await findOwnerByPhone(normalizedPhone);
+      await findOwnerByPhone(
+        normalizedPhone
+      );
 
     /*
      |--------------------------------------------------------------------------
@@ -327,9 +418,14 @@ app.post("/customer/check", async (req, res) => {
      */
 
     if (ownerDoc) {
-      const data = ownerDoc.data();
+      const data =
+        ownerDoc.data();
 
-      return res.json({
+      console.log(
+        "Existing owner account found."
+      );
+
+      return res.status(200).json({
         success: true,
         exists: true,
 
@@ -337,7 +433,8 @@ app.post("/customer/check", async (req, res) => {
           data.profileCompleted === true,
 
         ownerId:
-          data.ownerId || ownerDoc.id,
+          data.ownerId ||
+          ownerDoc.id,
 
         authUid:
           data.authUid ||
@@ -345,7 +442,8 @@ app.post("/customer/check", async (req, res) => {
           null,
 
         role:
-          data.role || "owner",
+          data.role ||
+          "owner",
 
         phone:
           normalizedPhone,
@@ -358,7 +456,11 @@ app.post("/customer/check", async (req, res) => {
      |--------------------------------------------------------------------------
      */
 
-    return res.json({
+    console.log(
+      "No existing owner account found."
+    );
+
+    return res.status(200).json({
       success: true,
       exists: false,
 
@@ -374,13 +476,41 @@ app.post("/customer/check", async (req, res) => {
     });
   } catch (error) {
     console.error(
-      "Customer check error:",
-      error.message
+      "=================================================="
+    );
+
+    console.error(
+      "CUSTOMER CHECK ERROR"
+    );
+
+    console.error(
+      "ERROR NAME:",
+      error?.name
+    );
+
+    console.error(
+      "ERROR MESSAGE:",
+      error?.message
+    );
+
+    if (error?.stack) {
+      console.error(
+        "ERROR STACK:",
+        error.stack
+      );
+    }
+
+    console.error(
+      "=================================================="
     );
 
     return res.status(500).json({
       success: false,
-      message: "Internal server error",
+      message:
+        "Customer check failed",
+      error:
+        error?.message ||
+        "Unknown backend error",
     });
   }
 });
