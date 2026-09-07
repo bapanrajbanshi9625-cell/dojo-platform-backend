@@ -7,6 +7,10 @@ app.use(express.json());
 
 let firebaseReady = false;
 
+// ============================================================
+// FIREBASE ADMIN INITIALIZATION
+// ============================================================
+
 try {
   if (
     process.env.FIREBASE_PROJECT_ID &&
@@ -17,16 +21,19 @@ try {
       credential: admin.credential.cert({
         projectId: process.env.FIREBASE_PROJECT_ID,
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(
-          /\\n/g,
-          "\n",
-        ),
+        privateKey:
+          process.env.FIREBASE_PRIVATE_KEY.replace(
+            /\\n/g,
+            "\n",
+          ),
       }),
     });
 
     firebaseReady = true;
 
-    console.log("Firebase Admin SDK initialized.");
+    console.log(
+      "Firebase Admin SDK initialized.",
+    );
   } else {
     console.log(
       "Firebase credentials are not configured yet.",
@@ -39,6 +46,10 @@ try {
   );
 }
 
+// ============================================================
+// HEALTH CHECK
+// ============================================================
+
 app.get("/", (req, res) => {
   res.status(200).json({
     success: true,
@@ -47,6 +58,10 @@ app.get("/", (req, res) => {
     firebase: firebaseReady,
   });
 });
+
+// ============================================================
+// PHONE NORMALIZATION
+// ============================================================
 
 function normalizeIndianPhone(phoneNumber) {
   if (!phoneNumber) {
@@ -74,6 +89,10 @@ function normalizeIndianPhone(phoneNumber) {
   return `+91${phone}`;
 }
 
+// ============================================================
+// PHONE MASKING
+// ============================================================
+
 function maskPhone(phoneNumber) {
   if (!phoneNumber) {
     return "unknown";
@@ -85,13 +104,23 @@ function maskPhone(phoneNumber) {
     return "***";
   }
 
-  return `${phone.substring(0, 3)}******${phone.substring(
+  return `${phone.substring(
+    0,
+    3,
+  )}******${phone.substring(
     phone.length - 2,
   )}`;
 }
 
-async function verifyMsg91AccessToken(accessToken) {
-  const authKey = process.env.MSG91_AUTH_KEY;
+// ============================================================
+// MSG91 ACCESS TOKEN VERIFICATION
+// ============================================================
+
+async function verifyMsg91AccessToken(
+  accessToken,
+) {
+  const authKey =
+    process.env.MSG91_AUTH_KEY;
 
   if (!authKey) {
     throw new Error(
@@ -112,18 +141,21 @@ async function verifyMsg91AccessToken(accessToken) {
     "https://api.msg91.com/api/v5/widget/verifyAccessToken",
     {
       method: "POST",
+
       headers: {
         authkey: authKey,
         "Content-Type": "application/json",
         Accept: "application/json",
       },
+
       body: JSON.stringify({
         "access-token": accessToken,
       }),
     },
   );
 
-  const text = await response.text();
+  const text =
+    await response.text();
 
   let data = {};
 
@@ -159,7 +191,13 @@ async function verifyMsg91AccessToken(accessToken) {
   return data;
 }
 
-async function findOwnerByPhone(phoneNumber) {
+// ============================================================
+// FIND EXISTING OWNER
+// ============================================================
+
+async function findOwnerByPhone(
+  phoneNumber,
+) {
   if (!firebaseReady) {
     throw new Error(
       "Firebase Admin SDK is not ready.",
@@ -167,13 +205,16 @@ async function findOwnerByPhone(phoneNumber) {
   }
 
   const normalizedPhone =
-    normalizeIndianPhone(phoneNumber);
+    normalizeIndianPhone(
+      phoneNumber,
+    );
 
   if (!normalizedPhone) {
     return null;
   }
 
-  const db = admin.firestore();
+  const db =
+    admin.firestore();
 
   const cleanTenDigit =
     normalizedPhone.substring(3);
@@ -190,18 +231,27 @@ async function findOwnerByPhone(phoneNumber) {
     "phoneNumber",
   ];
 
-  for (const field of phoneFields) {
-    for (const value of phoneValues) {
+  for (
+    const field of phoneFields
+  ) {
+    for (
+      const value of phoneValues
+    ) {
       try {
         console.log(
           `Firestore owner lookup: ${field}`,
         );
 
-        const snapshot = await db
-          .collection("owners")
-          .where(field, "==", value)
-          .limit(1)
-          .get();
+        const snapshot =
+          await db
+            .collection("owners")
+            .where(
+              field,
+              "==",
+              value,
+            )
+            .limit(1)
+            .get();
 
         if (!snapshot.empty) {
           console.log(
@@ -228,6 +278,10 @@ async function findOwnerByPhone(phoneNumber) {
   return null;
 }
 
+// ============================================================
+// CREATE FIREBASE CUSTOM TOKEN
+// ============================================================
+
 async function createOwnerFirebaseCustomToken(
   ownerData,
   ownerDocumentId,
@@ -238,11 +292,12 @@ async function createOwnerFirebaseCustomToken(
     );
   }
 
-  const ownerAuthUid = String(
-    ownerData.authUid ||
-      ownerData.uid ||
-      "",
-  ).trim();
+  const ownerAuthUid =
+    String(
+      ownerData.authUid ||
+        ownerData.uid ||
+        "",
+    ).trim();
 
   if (!ownerAuthUid) {
     throw new Error(
@@ -250,16 +305,18 @@ async function createOwnerFirebaseCustomToken(
     );
   }
 
-  const ownerId = String(
-    ownerData.ownerId ||
-      ownerDocumentId ||
-      "",
-  ).trim();
+  const ownerId =
+    String(
+      ownerData.ownerId ||
+        ownerDocumentId ||
+        "",
+    ).trim();
 
-  const role = String(
-    ownerData.role ||
-      "owner",
-  ).trim();
+  const role =
+    String(
+      ownerData.role ||
+        "owner",
+    ).trim();
 
   console.log(
     "Creating Firebase custom token for existing owner.",
@@ -276,16 +333,22 @@ async function createOwnerFirebaseCustomToken(
   );
 
   const customToken =
-    await admin.auth().createCustomToken(
-      ownerAuthUid,
-      {
-        role: role,
-        ownerId: ownerId,
-      },
-    );
+    await admin
+      .auth()
+      .createCustomToken(
+        ownerAuthUid,
+        {
+          role: role,
+          ownerId: ownerId,
+        },
+      );
 
   return customToken;
 }
+
+// ============================================================
+// CUSTOMER CHECK
+// ============================================================
 
 app.post(
   "/customer/check",
@@ -299,6 +362,10 @@ app.post(
     );
 
     try {
+      // ======================================================
+      // FIREBASE CHECK
+      // ======================================================
+
       if (!firebaseReady) {
         console.error(
           "Firebase Admin SDK is not ready.",
@@ -311,15 +378,24 @@ app.post(
         });
       }
 
+      // ======================================================
+      // REQUEST DATA
+      // ======================================================
+
       const accessToken =
         req.body?.accessToken;
 
       const phoneNumber =
         req.body?.phoneNumber;
 
+      // ======================================================
+      // ACCESS TOKEN VALIDATION
+      // ======================================================
+
       if (
         !accessToken ||
-        typeof accessToken !== "string"
+        typeof accessToken !==
+          "string"
       ) {
         console.error(
           "Missing MSG91 accessToken.",
@@ -332,9 +408,14 @@ app.post(
         });
       }
 
+      // ======================================================
+      // PHONE VALIDATION
+      // ======================================================
+
       if (
         !phoneNumber ||
-        typeof phoneNumber !== "string"
+        typeof phoneNumber !==
+          "string"
       ) {
         console.error(
           "Missing phoneNumber.",
@@ -346,6 +427,10 @@ app.post(
             "phoneNumber is required.",
         });
       }
+
+      // ======================================================
+      // NORMALIZE PHONE
+      // ======================================================
 
       const normalizedPhone =
         normalizeIndianPhone(
@@ -366,12 +451,14 @@ app.post(
 
       console.log(
         "Customer phone:",
-        maskPhone(normalizedPhone),
+        maskPhone(
+          normalizedPhone,
+        ),
       );
 
-      // --------------------------------------------------
+      // ======================================================
       // 1. VERIFY MSG91 ACCESS TOKEN
-      // --------------------------------------------------
+      // ======================================================
 
       const msg91Data =
         await verifyMsg91AccessToken(
@@ -384,12 +471,14 @@ app.post(
 
       console.log(
         "MSG91 verified response:",
-        JSON.stringify(msg91Data),
+        JSON.stringify(
+          msg91Data,
+        ),
       );
 
-      // --------------------------------------------------
+      // ======================================================
       // 2. FIND EXISTING OWNER
-      // --------------------------------------------------
+      // ======================================================
 
       console.log(
         "Using verified login phone for owner lookup.",
@@ -400,21 +489,37 @@ app.post(
           normalizedPhone,
         );
 
-      // --------------------------------------------------
+      // ======================================================
       // 3. EXISTING OWNER
-      // --------------------------------------------------
+      // ======================================================
 
       if (ownerDoc) {
-        const data = ownerDoc.data();
+        const data =
+          ownerDoc.data();
+
+        // ----------------------------------------------------
+        // PERMANENT OWNER ID
+        // ----------------------------------------------------
 
         const ownerId =
           data.ownerId ||
           ownerDoc.id;
 
+        // ----------------------------------------------------
+        // ORIGINAL FIREBASE AUTH UID
+        // ----------------------------------------------------
+
         const authUid =
           data.authUid ||
           data.uid ||
           null;
+
+        // ----------------------------------------------------
+        // EXACT FIRESTORE DOCUMENT ID
+        // ----------------------------------------------------
+
+        const ownerDocumentId =
+          ownerDoc.id;
 
         console.log(
           "Existing owner account found.",
@@ -422,7 +527,7 @@ app.post(
 
         console.log(
           "OWNER DOCUMENT:",
-          ownerDoc.id,
+          ownerDocumentId,
         );
 
         console.log(
@@ -435,6 +540,10 @@ app.post(
           authUid,
         );
 
+        // ----------------------------------------------------
+        // AUTH UID REQUIRED
+        // ----------------------------------------------------
+
         if (!authUid) {
           console.error(
             "Existing owner has no authUid/uid.",
@@ -442,32 +551,40 @@ app.post(
 
           return res.status(409).json({
             success: false,
+
             exists: true,
+
             message:
               "Existing owner account is missing Firebase authUid.",
           });
         }
 
-        // ------------------------------------------------
-        // IMPORTANT:
-        // Sign the EXISTING owner into Firebase using
-        // their ORIGINAL Firebase UID.
+        // ----------------------------------------------------
+        // IMPORTANT
+        //
+        // Use the ORIGINAL Firebase UID.
         //
         // No anonymous account.
         // No temporary UID.
         // No phoneAccounts document.
         // No new owner document.
-        // ------------------------------------------------
+        // ----------------------------------------------------
 
         const firebaseCustomToken =
           await createOwnerFirebaseCustomToken(
             data,
-            ownerDoc.id,
+            ownerDocumentId,
           );
 
         console.log(
           "Firebase custom token created successfully.",
         );
+
+        // ----------------------------------------------------
+        // EXISTING OWNER RESPONSE
+        //
+        // ownerDocumentId is REQUIRED by Flutter.
+        // ----------------------------------------------------
 
         return res.status(200).json({
           success: true,
@@ -475,14 +592,21 @@ app.post(
           exists: true,
 
           profileCompleted:
-            data.profileCompleted === true,
+            data.profileCompleted ===
+            true,
 
           isActive:
             data.isActive !== false,
 
+          // EXACT FIRESTORE DOCUMENT ID
+          ownerDocumentId:
+            ownerDocumentId,
+
+          // PERMANENT BUSINESS OWNER ID
           ownerId:
             ownerId,
 
+          // ORIGINAL FIREBASE AUTH UID
           authUid:
             authUid,
 
@@ -498,9 +622,9 @@ app.post(
         });
       }
 
-      // --------------------------------------------------
+      // ======================================================
       // 4. NEW OWNER
-      // --------------------------------------------------
+      // ======================================================
 
       console.log(
         "No existing owner account found.",
@@ -513,6 +637,10 @@ app.post(
 
         profileCompleted: false,
 
+        isActive: true,
+
+        ownerDocumentId: null,
+
         ownerId: null,
 
         authUid: null,
@@ -522,7 +650,8 @@ app.post(
         phone:
           normalizedPhone,
 
-        firebaseCustomToken: null,
+        firebaseCustomToken:
+          null,
       });
     } catch (error) {
       console.error(
@@ -563,12 +692,23 @@ app.post(
   },
 );
 
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: "Endpoint not found.",
-  });
-});
+// ============================================================
+// 404 HANDLER
+// ============================================================
+
+app.use(
+  (req, res) => {
+    res.status(404).json({
+      success: false,
+      message:
+        "Endpoint not found.",
+    });
+  },
+);
+
+// ============================================================
+// SERVER START
+// ============================================================
 
 const PORT =
   process.env.PORT || 10000;
